@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gemini Excel Assistant</title>
+  <!-- Thư viện bắt buộc của Microsoft Office.js -->
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 12px;
+      background-color: #f8f9fa;
+      color: #333;
+    }
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      height: 94vh;
+    }
+    h3 {
+      margin: 0 0 12px 0;
+      color: #1a73e8;
+      font-size: 16px;
+      text-align: center;
+    }
+    .form-group {
+      margin-bottom: 8px;
+    }
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      display: block;
+      margin-bottom: 4px;
+    }
+    input[type="password"], select, textarea {
+      width: 100%;
+      padding: 7px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+      font-size: 13px;
+    }
+    .chat-box {
+      flex: 1;
+      background: #ffffff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 10px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .msg {
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.4;
+      max-width: 90%;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+    .user-msg {
+      background-color: #e8f0fe;
+      color: #1967d2;
+      align-self: flex-end;
+    }
+    .ai-msg {
+      background-color: #f1f3f4;
+      color: #202124;
+      align-self: flex-start;
+    }
+    .options-row {
+      margin: 6px 0;
+    }
+    .checkbox-label {
+      font-weight: normal;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    button {
+      width: 100%;
+      padding: 9px;
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #1557b0;
+    }
+    button:disabled {
+      background-color: #a0c3ff;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <h3>✨ Gemini Excel Assistant</h3>
+
+    <div class="form-group">
+      <label for="apiKey">🔑 Gemini API Key:</label>
+      <input type="password" id="apiKey" placeholder="Nhập API Key từ Google AI Studio..." />
+    </div>
+
+    <div class="form-group">
+      <label for="modelSelect">🤖 Chọn Model:</label>
+      <select id="modelSelect">
+        <option value="gemini-2.5-flash">Gemini 2.5 Flash (Nhanh & Tối ưu)</option>
+        <option value="gemini-2.5-pro">Gemini 2.5 Pro (Phân tích & Hàm phức tạp)</option>
+        <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+        <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+      </select>
+    </div>
+
+    <div class="chat-box" id="chatBox">
+      <div class="msg ai-msg">Xin chào! Hãy bôi đen một vùng dữ liệu trên Excel và yêu cầu tôi phân tích, viết hàm hoặc chỉnh sửa trực tiếp nhé!</div>
+    </div>
+
+    <div class="input-section">
+      <textarea id="userInput" rows="3" placeholder="VD: Tính tổng cột B, hoặc tạo bảng danh sách 5 nhân viên kèm lương..."></textarea>
+      <div class="options-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="applyToExcel" checked />
+          Cho phép Gemini sửa trực tiếp vào ô đang chọn
+        </label>
+      </div>
+      <button id="sendBtn">Gửi yêu cầu</button>
+    </div>
+  </div>
+
+  <script>
+    // Khởi tạo Office Add-in
+    Office.onReady((info) => {
+      if (info.host === Office.HostType.Excel) {
+        document.getElementById("sendBtn").addEventListener("click", handleSend);
+
+        const apiKeyInput = document.getElementById("apiKey");
+        if (localStorage.getItem("gemini_excel_api_key")) {
+          apiKeyInput.value = localStorage.getItem("gemini_excel_api_key");
+        }
+        apiKeyInput.addEventListener("change", () => {
+          localStorage.setItem("gemini_excel_api_key", apiKeyInput.value.trim());
+        });
+      }
+    });
+
+    function appendMessage(text, isUser) {
+      const chatBox = document.getElementById("chatBox");
+      const msgDiv = document.createElement("div");
+      msgDiv.className = "msg " + (isUser ? "user-msg" : "ai-msg");
+      msgDiv.innerText = text;
+      chatBox.appendChild(msgDiv);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function handleSend() {
+      const apiKey = document.getElementById("apiKey").value.trim();
+      const model = document.getElementById("modelSelect").value;
+      const userInput = document.getElementById("userInput").value.trim();
+      const applyToExcel = document.getElementById("applyToExcel").checked;
+      const sendBtn = document.getElementById("sendBtn");
+
+      if (!apiKey) {
+        appendMessage("⚠️ Vui lòng nhập Gemini API Key trước khi sử dụng!", false);
+        return;
+      }
+      if (!userInput) return;
+
+      appendMessage(userInput, true);
+      document.getElementById("userInput").value = "";
+      sendBtn.disabled = true;
+      sendBtn.innerText = "Đang xử lý...";
+
+      try {
+        await Excel.run(async (context) => {
+          const range = context.workbook.getSelectedRange();
+          range.load(["address", "values", "formulas", "rowCount", "columnCount"]);
+          await context.sync();
+
+          const systemPrompt = `
+Bạn là trợ lý chuyên gia Microsoft Excel được tích hợp trực tiếp vào bảng tính.
+Thông tin vùng ô người dùng đang chọn trên Excel:
+- Địa chỉ vùng: ${range.address}
+- Kích thước: ${range.rowCount} hàng x ${range.columnCount} cột
+- Giá trị hiện tại (Values): ${JSON.stringify(range.values)}
+- Công thức hiện tại (Formulas): ${JSON.stringify(range.formulas)}
+
+Yêu cầu từ người dùng: "${userInput}"
+
+Hãy trả lời BẮT BUỘC dưới định dạng JSON hợp lệ theo cấu trúc sau:
+{
+  "reply": "Câu trả lời, giải thích chi tiết hoặc kết quả phân tích để hiển thị trong khung chat",
+  "shouldUpdateExcel": true hoặc false,
+  "excelData": [
+    ["Giá trị hoặc công thức ô (0,0)", "Giá trị hoặc công thức ô (0,1)"]
+  ]
+}
+Lưu ý: Nếu chèn công thức Excel, bắt đầu bằng dấu "=" và dùng dấu phẩy (,) ngăn cách đối số. Nếu không sửa bảng tính, để "excelData": [].`;
+
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: systemPrompt }] }],
+              generationConfig: { responseMimeType: "application/json" }
+            })
+          });
+
+          const data = await response.json();
+          if (data.error) throw new Error(data.error.message);
+
+          const result = JSON.parse(data.candidates[0].content.parts[0].text);
+          appendMessage(result.reply, false);
+
+          if (applyToExcel && result.shouldUpdateExcel && Array.isArray(result.excelData) && result.excelData.length > 0) {
+            const numRows = result.excelData.length;
+            const numCols = result.excelData[0].length;
+            const targetRange = range.getCell(0, 0).getResizedRange(numRows - 1, numCols - 1);
+            targetRange.formulas = result.excelData;
+            await context.sync();
+            appendMessage(`✅ Đã cập nhật dữ liệu/công thức vào vùng ${numRows}x${numCols} từ ô đầu của ${range.address}.`, false);
+          }
+        });
+      } catch (error) {
+        appendMessage("❌ Lỗi: " + error.message, false);
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.innerText = "Gửi yêu cầu";
+      }
+    }
+  </script>
+</body>
+</html>
