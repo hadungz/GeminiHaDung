@@ -239,5 +239,205 @@ Lưu ý: Nếu chèn công thức Excel, bắt đầu bằng dấu "=" và dùng
       }
     }
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/es6-promise@4/dist/es6-promise.auto.min.js"></script>
+  <script>
+    var currentHost = null;
+
+    Office.onReady(function (info) {
+      currentHost = info.host;
+      document.getElementById("sendBtn").onclick = handleSend;
+
+      // Đổi tiêu đề tự động theo phần mềm đang mở
+      var titleEl = document.querySelector("h3");
+      if (currentHost === Office.HostType.Word) {
+        titleEl.innerText = "✨ Gemini Word Assistant";
+        document.getElementById("userInput").placeholder = "VD: Viết lại đoạn văn đang bôi đen, tóm tắt, dịch thuật hoặc soạn hợp đồng...";
+      }
+
+      var apiKeyInput = document.getElementById("apiKey");
+      var savedKey = localStorage.getItem("gemini_office_api_key");
+      if (savedKey) apiKeyInput.value = savedKey;
+      apiKeyInput.onchange = function () {
+        localStorage.setItem("gemini_office_api_key", apiKeyInput.value.trim());
+      };
+    });
+
+    function appendMessage(text, isUser) {
+      var chatBox = document.getElementById("chatBox");
+      var msgDiv = document.createElement("div");
+      msgDiv.className = "msg " + (isUser ? "user-msg" : "ai-msg");
+      msgDiv.innerText = text;
+      chatBox.appendChild(msgDiv);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function callGeminiAPI(url, payload, callback) {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", url, true);
+      xhr.setRequestHeader("Content-Type", "application/json");
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState === 4) {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            callback(null, JSON.parse(xhr.responseText));
+          } else {
+            callback(new Error("Lỗi API (" + xhr.status + "): " + xhr.responseText));
+          }
+        }
+      };
+      xhr.send(JSON.stringify(payload));
+    }
+
+    function handleSend() {
+      var apiKey = document.getElementById("apiKey").value.trim();
+      var model = document.getElementById("modelSelect").value;
+      var userInput = document.getElementById("userInput").value.trim();
+      var applyToDoc = document.getElementById("applyToExcel").checked;
+      var sendBtn = document.getElementById("sendBtn");
+
+      if (!apiKey) {
+        appendMessage("⚠️ Vui lòng nhập Gemini API Key!", false);
+        return;
+      }
+      if (!userInput) return;
+
+      appendMessage(userInput, true);
+      document.getElementById("userInput").value = "";
+      sendBtn.disabled = true;
+      sendBtn.innerText = "Đang xử lý...";
+
+      if (currentHost === Office.HostType.Excel) {
+        runInExcel(apiKey, model, userInput, applyToDoc, sendBtn);
+      } else if (currentHost === Office.HostType.Word) {
+        runInWord(apiKey, model, userInput, applyToDoc, sendBtn);
+      } else {
+        appendMessage("❌ Ứng dụng chưa được hỗ trợ.", false);
+        sendBtn.disabled = false;
+        sendBtn.innerText = "Gửi yêu cầu";
+      }
+    }
+
+    // XỬ LÝ TRÊN WORD
+    function runInWord(apiKey, model, userInput, applyToWord, sendBtn) {
+      Word.run(function (context) {
+        var selection = context.document.getSelection();
+        selection.load("text");
+
+        return context.sync().then(function () {
+          var selectedText = selection.text || "(Không bôi đen văn bản nào)";
+          var systemPrompt =
+            "Bạn là trợ lý soạn thảo Microsoft Word chuyên nghiệp.\n" +
+            "Đoạn văn bản người dùng đang bôi đen trong Word:\n\"\"\"\n" + selectedText + "\n\"\"\"\n\n" +
+            "Yêu cầu của người dùng: \"" + userInput + "\"\n\n" +
+            "Trả lời BẮT BUỘC dưới dạng JSON hợp lệ theo cấu trúc:\n" +
+            "{\n" +
+            "  \"reply\": \"Câu trả lời hoặc giải thích hiển thị trong khung chat\",\n" +
+            "  \"shouldUpdateWord\": true hoặc false (true nếu người dùng yêu cầu viết mới, viết lại, sửa lỗi, dịch và chèn vào tài liệu),\n" +
+            "  \"wordText\": \"Nội dung văn bản hoàn chỉnh sẽ chèn/thay thế trực tiếp vào Word\"\n" +
+            "}";
+
+          var url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+          var payload = {
+            contents: [{ parts: [{ text: systemPrompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+          };
+
+          callGeminiAPI(url, payload, function (err, data) {
+            if (err) {
+              appendMessage("❌ " + err.message, false);
+              sendBtn.disabled = false;
+              sendBtn.innerText = "Gửi yêu cầu";
+              return;
+            }
+            try {
+              var result = JSON.parse(data.candidates[0].content.parts[0].text);
+              appendMessage(result.reply, false);
+
+              if (applyToWord && result.shouldUpdateWord && result.wordText) {
+                Word.run(function (writeCtx) {
+                  var range = writeCtx.document.getSelection();
+                  range.insertText(result.wordText, Word.InsertLocation.replace);
+                  return writeCtx.sync().then(function () {
+                    appendMessage("✅ Đã chèn/cập nhật nội dung trực tiếp vào tài liệu Word.", false);
+                  });
+                });
+              }
+            } catch (e) {
+              appendMessage("❌ Lỗi xử lý phản hồi: " + e.message, false);
+            }
+            sendBtn.disabled = false;
+            sendBtn.innerText = "Gửi yêu cầu";
+          });
+        });
+      }).catch(function (error) {
+        appendMessage("❌ Lỗi Word: " + error.message, false);
+        sendBtn.disabled = false;
+        sendBtn.innerText = "Gửi yêu cầu";
+      });
+    }
+
+    // XỬ LÝ TRÊN EXCEL
+    function runInExcel(apiKey, model, userInput, applyToExcel, sendBtn) {
+      Excel.run(function (context) {
+        var range = context.workbook.getSelectedRange();
+        range.load(["address", "values", "formulas", "rowCount", "columnCount"]);
+
+        return context.sync().then(function () {
+          var systemPrompt =
+            "Bạn là trợ lý chuyên gia Microsoft Excel.\n" +
+            "Vùng đang chọn: " + range.address + " (" + range.rowCount + "x" + range.columnCount + ")\n" +
+            "Giá trị (Values): " + JSON.stringify(range.values) + "\n" +
+            "Công thức (Formulas): " + JSON.stringify(range.formulas) + "\n\n" +
+            "Yêu cầu: \"" + userInput + "\"\n\n" +
+            "Trả lời BẮT BUỘC dưới dạng JSON hợp lệ:\n" +
+            "{\n" +
+            "  \"reply\": \"Câu trả lời hiển thị trong khung chat\",\n" +
+            "  \"shouldUpdateExcel\": true hoặc false,\n" +
+            "  \"excelData\": [[\"Giá trị hoặc công thức ô (0,0)\"]]\n" +
+            "}";
+
+          var url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+          var payload = {
+            contents: [{ parts: [{ text: systemPrompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+          };
+
+          callGeminiAPI(url, payload, function (err, data) {
+            if (err) {
+              appendMessage("❌ " + err.message, false);
+              sendBtn.disabled = false;
+              sendBtn.innerText = "Gửi yêu cầu";
+              return;
+            }
+            try {
+              var result = JSON.parse(data.candidates[0].content.parts[0].text);
+              appendMessage(result.reply, false);
+
+              if (applyToExcel && result.shouldUpdateExcel && result.excelData && result.excelData.length > 0) {
+                Excel.run(function (writeCtx) {
+                  var activeRange = writeCtx.workbook.getSelectedRange();
+                  var numRows = result.excelData.length;
+                  var numCols = result.excelData[0].length;
+                  var targetRange = activeRange.getCell(0, 0).getResizedRange(numRows - 1, numCols - 1);
+                  targetRange.formulas = result.excelData;
+                  return writeCtx.sync().then(function () {
+                    appendMessage("✅ Đã cập nhật vùng " + numRows + "x" + numCols + " trên Excel.", false);
+                  });
+                });
+              }
+            } catch (e) {
+              appendMessage("❌ Lỗi xử lý phản hồi: " + e.message, false);
+            }
+            sendBtn.disabled = false;
+            sendBtn.innerText = "Gửi yêu cầu";
+          });
+        });
+      }).catch(function (error) {
+        appendMessage("❌ Lỗi Excel: " + error.message, false);
+        sendBtn.disabled = false;
+        sendBtn.innerText = "Gửi yêu cầu";
+      });
+    }
+  </script>
+  </script>
 </body>
 </html>
